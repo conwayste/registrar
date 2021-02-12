@@ -9,11 +9,11 @@ import (
 	"io"
 )
 
-type ServerStatus struct {
+type ServerGetStatus struct {
 	Nonce uint64
 }
 
-type ServerGetStatus struct {
+type ServerStatus struct {
 	Nonce         uint64
 	ServerVersion string
 	PlayerCount   uint64
@@ -22,18 +22,27 @@ type ServerGetStatus struct {
 }
 
 var (
-	ErrUnknownType = errors.New("unknown type for marshal/unmarshal operation")
-	ErrMalformed   = errors.New("malformed packet")
+	ErrUnknownType  = errors.New("unknown type for marshal/unmarshal operation")
+	ErrMalformed    = errors.New("malformed packet")
+	ErrWrongVariant = errors.New("wrong variant")
 )
 
 func Marshal(v interface{}) ([]byte, error) {
 	buf := &bytes.Buffer{}
 	switch msg := v.(type) {
-	case *ServerStatus:
+	case *ServerGetStatus:
+		variantNum := uint32(4)
+		if err := binary.Write(buf, binary.LittleEndian, &variantNum); err != nil {
+			return nil, err
+		}
 		if err := binary.Write(buf, binary.LittleEndian, &msg.Nonce); err != nil {
 			return nil, err
 		}
-	case *ServerGetStatus:
+	case *ServerStatus:
+		variantNum := uint32(5)
+		if err := binary.Write(buf, binary.LittleEndian, &variantNum); err != nil {
+			return nil, err
+		}
 		if err := binary.Write(buf, binary.LittleEndian, &msg.Nonce); err != nil {
 			return nil, err
 		}
@@ -65,13 +74,23 @@ func writeString(buf io.Writer, s string) error {
 }
 
 func Unmarshal(packetBytes []byte, v interface{}) error {
+	var variantNum uint32
 	buf := bytes.NewBuffer(packetBytes)
+	if err := binary.Read(buf, binary.LittleEndian, &variantNum); err != nil {
+		return err
+	}
 	switch msg := v.(type) {
-	case *ServerStatus:
+	case *ServerGetStatus:
+		if variantNum != 4 {
+			return ErrWrongVariant
+		}
 		if err := binary.Read(buf, binary.LittleEndian, &msg.Nonce); err != nil {
 			return err
 		}
-	case *ServerGetStatus:
+	case *ServerStatus:
+		if variantNum != 5 {
+			return ErrWrongVariant
+		}
 		if err := binary.Read(buf, binary.LittleEndian, &msg.Nonce); err != nil {
 			return err
 		}
@@ -91,7 +110,6 @@ func Unmarshal(packetBytes []byte, v interface{}) error {
 			return err
 		}
 		msg.ServerName = serverName
-		//XXX unmarshal
 	default:
 		return ErrUnknownType
 	}
