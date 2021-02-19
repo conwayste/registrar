@@ -1,6 +1,4 @@
-// Package packet supports sending GetStatus messages to conwayste servers and
-// getting Status messages back from them.
-package packet
+package monitor
 
 import (
 	"bytes"
