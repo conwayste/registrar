@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	glog "log"
+	"net"
 	"net/http"
 	"time"
 
@@ -31,11 +32,29 @@ func main() {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
 	//XXX also cancel on signals
-	m := monitor.NewMonitor()
-	m.AddServer("127.0.0.1:2016") //XXX hardcoded localhost server!
-	go monitor.Start(ctx, log, m)
 
-	log.Info("registrar is listening", zap.String("addr", srv.Addr))
+	conn, err := net.ListenPacket("udp", "0.0.0.0:0")
+	if err != nil {
+		log.Error("failed to open UDP port", zap.Error(err))
+		return
+	}
+	defer conn.Close()
+
+	m := monitor.NewMonitor()
+	if err := m.AddServer("chococat.conwayste.rs:2016"); err != nil { //XXX hardcoded remote server!
+		log.Error("failed to add server", zap.Error(err))
+		return
+	}
+	if err := m.AddServer("127.0.0.1:2016"); err != nil { //XXX hardcoded localhost server!
+		log.Error("failed to add server", zap.Error(err))
+		return
+	}
+	go monitor.Send(ctx, log, m, conn)
+	go monitor.Receive(ctx, log, m, conn)
+	//XXX errgroup for above
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	log.Info("registrar is listening", zap.String("httpAddr", srv.Addr), zap.String("udpAddr", localAddr.String()))
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal("error from HTTP server", zap.Error(err))
 	}
