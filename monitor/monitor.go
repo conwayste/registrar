@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -12,8 +13,9 @@ import (
 )
 
 const (
-	delayInterval = 5 * time.Second //XXX fiddle with later
-	maxPacketSize = 1448
+	delayInterval     = 5 * time.Second //XXX fiddle with later
+	maxPacketSize     = 1448
+	packetReadTimeout = 500 * time.Millisecond
 )
 
 type Monitor struct {
@@ -86,6 +88,7 @@ func (s *Status) CalcPing() *time.Duration {
 
 // TODO: panic recovery
 func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn) error {
+	defer func() { log.Debug("Send exited") }()
 	ticker := time.NewTicker(delayInterval)
 	for {
 		select {
@@ -126,8 +129,8 @@ func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn)
 	}
 }
 
-// TODO: panic recovery
 func Receive(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn) error {
+	defer func() { log.Debug("Receive exited") }()
 	packetBuf := make([]byte, maxPacketSize)
 	for {
 		select {
@@ -136,7 +139,9 @@ func Receive(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketCo
 		default:
 		}
 
-		// TODO: conn.SetReadDeadline(...)
+		if err := conn.SetReadDeadline(time.Now().Add(packetReadTimeout)); err != nil {
+			log.Error("failed to set read timeout", zap.Error(err))
+		}
 		n, addr, err := conn.ReadFrom(packetBuf)
 		if n > 0 {
 			remoteAddr, ok := addr.(*net.UDPAddr)
@@ -150,15 +155,23 @@ func Receive(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketCo
 			packetBuf = make([]byte, maxPacketSize)
 		}
 		if err != nil {
-			// TODO: should we always exit here?
-			log.Error("Receive goroutine exiting due to error")
+			var opErr *net.OpError
+			if !errors.As(err, &opErr) || !opErr.Timeout() {
+				log.Error("Receive goroutine exiting due to error")
+				return err
+			}
 		}
 	}
 }
 
 func processPacket(ctx context.Context, log *zap.Logger, m *Monitor, remoteAddr *net.UDPAddr, buf []byte) {
 	log.Debug("started processing packet")
-	defer func() { log.Debug("finished processing packet") }()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("recovered from panic while processing packet", zap.Any("panicValue", r))
+		}
+		log.Debug("finished processing packet")
+	}()
 
 	m.m.Lock()
 	defer m.m.Unlock()
@@ -168,6 +181,7 @@ func processPacket(ctx context.Context, log *zap.Logger, m *Monitor, remoteAddr 
 		log.Error("could not look up server name by IP of received packet")
 		return
 	}
+	log = log.With(zap.String("serverName", serverName))
 	status, ok := m.statuses[serverName]
 	if !ok {
 		log.Error("could not find Status by server name")

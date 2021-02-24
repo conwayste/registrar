@@ -5,12 +5,15 @@ import (
 	glog "log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/conwayste/registrar/monitor"
 
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -31,7 +34,15 @@ func main() {
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
-	//XXX also cancel on signals
+
+	// Cancel on SIGINT (Ctrl-C)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		<-sigCh
+		log.Info("SIGINT received; cancelling...")
+		cancelFunc()
+	}()
 
 	conn, err := net.ListenPacket("udp", "0.0.0.0:0")
 	if err != nil {
@@ -49,13 +60,25 @@ func main() {
 		log.Error("failed to add server", zap.Error(err))
 		return
 	}
-	go monitor.Send(ctx, log, m, conn)
-	go monitor.Receive(ctx, log, m, conn)
-	//XXX errgroup for above
+	grp, grpCtx := errgroup.WithContext(ctx) // grpCtx is cancelled once either returns non-nil error or both exit
+	grp.Go(func() error {
+		return monitor.Send(grpCtx, log, m, conn)
+	})
+	grp.Go(func() error {
+		return monitor.Receive(grpCtx, log, m, conn)
+	})
+	go func() {
+		err := grp.Wait()
+		if err != nil && err != context.Canceled {
+			log.Error("error from Send or Receive", zap.Error(err))
+		}
+		log.Info("errgroup exited; shutting down HTTP server...")
+		srv.Shutdown(ctx)
+	}()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	log.Info("registrar is listening", zap.String("httpAddr", srv.Addr), zap.String("udpAddr", localAddr.String()))
-	if err := srv.ListenAndServe(); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal("error from HTTP server", zap.Error(err))
 	}
 }
