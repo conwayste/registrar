@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	glog "log"
 	"net"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/conwayste/registrar/api"
 	"github.com/conwayste/registrar/monitor"
 
 	"github.com/gorilla/mux"
@@ -16,14 +18,26 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var (
+	// TODO: logLevel = flag.String("logLevel", "debug", "error|warn|info|debug")
+	devMode = flag.Bool("devMode", true, "whether to run in development mode")
+)
+
 func main() {
-	log, err := zap.NewDevelopment()
+	flag.Parse() // required to get above vars set to correct values
+	var err error
+	var log *zap.Logger
+	if *devMode {
+		log, err = zap.NewDevelopment()
+	} else {
+		log, err = zap.NewProduction()
+	}
 	if err != nil {
 		glog.Fatalf("failed to construct logger: %v", err)
 	}
+	defer log.Sync() // Must be called on shutdown
 	router := mux.NewRouter()
-	router.HandleFunc("/test", testRoute)
-	//router.HandleFunc
+	api.AddRoutes(router)
 	srv := &http.Server{
 		Handler: router,
 		Addr:    "127.0.0.1:8000",
@@ -81,10 +95,4 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal("error from HTTP server", zap.Error(err))
 	}
-}
-
-func testRoute(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("content-type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"ok": true}`))
 }

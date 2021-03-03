@@ -20,7 +20,6 @@ const (
 
 type Monitor struct {
 	statuses map[string]*Status
-	resolved map[string]*net.UDPAddr // XXX: do we need this?
 	ipToName map[string]string
 	m        sync.RWMutex // guards statuses, resolved, and ipToName
 }
@@ -28,7 +27,6 @@ type Monitor struct {
 func NewMonitor() *Monitor {
 	return &Monitor{
 		statuses: make(map[string]*Status),
-		resolved: make(map[string]*net.UDPAddr),
 		ipToName: make(map[string]string),
 	}
 }
@@ -41,15 +39,16 @@ func (m *Monitor) AddServer(serverName string) error {
 	m.m.Lock()
 	defer m.m.Unlock()
 	// TODO: check that an existing server isn't getting overwritten
-	m.statuses[serverName] = &Status{
+	status := &Status{
 		inFlight: make(map[uint64]time.Time),
 	}
+	m.statuses[serverName] = status
 
 	dst, err := net.ResolveUDPAddr("udp", serverName)
 	if err != nil {
 		return fmt.Errorf("failed to resolve server name: %w", err)
 	}
-	m.resolved[serverName] = dst
+	status.ResolvedAddr = dst
 	ipStr := dst.String()
 	m.ipToName[ipStr] = serverName
 	return nil
@@ -62,6 +61,7 @@ type Status struct {
 	// rtts is a slice of ping round trip times. The newest has the highest index
 	//XXX needs cleanup mechanism so it can't increase without bound
 	rtts          []time.Duration
+	ResolvedAddr  *net.UDPAddr
 	ServerVersion string
 	PlayerCount   uint64
 	RoomCount     uint64
@@ -100,7 +100,7 @@ func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn)
 		m.m.Lock()
 		func() {
 			defer m.m.Unlock()
-			for serverName, status := range m.statuses {
+			for serverName, _ := range m.statuses {
 				log := log.With(zap.String("serverName", serverName))
 				log.Debug("sending server ping")
 
@@ -112,11 +112,12 @@ func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn)
 					log.Error("failed to marshal GetStatus", zap.Error(err))
 					continue
 				}
-				dst, ok := m.resolved[serverName]
+				status, ok := m.statuses[serverName]
 				if !ok {
-					log.Error("address not resolved")
+					log.Error("status not found in map for server name")
 					continue
 				}
+				dst := status.ResolvedAddr
 				_, err = conn.WriteTo(packetBytes, dst)
 				if err != nil {
 					log.Error("failed to send GetStatus", zap.Error(err))
