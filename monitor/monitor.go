@@ -31,6 +31,14 @@ func NewMonitor() *Monitor {
 	}
 }
 
+func (m *Monitor) ListServers() []string {
+	names := []string{}
+	for serverName := range m.statuses {
+		names = append(names, serverName)
+	}
+	return names
+}
+
 func (m *Monitor) AddServer(serverName string) error {
 	if m == nil {
 		return nil

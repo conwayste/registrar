@@ -36,15 +36,6 @@ func main() {
 		glog.Fatalf("failed to construct logger: %v", err)
 	}
 	defer log.Sync() // Must be called on shutdown
-	router := mux.NewRouter()
-	api.AddRoutes(router)
-	srv := &http.Server{
-		Handler: router,
-		Addr:    "127.0.0.1:8000",
-		// Good practice: enforce timeouts for servers you create!
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
-	}
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
@@ -81,6 +72,17 @@ func main() {
 	grp.Go(func() error {
 		return monitor.Receive(grpCtx, log, m, conn)
 	})
+
+	router := mux.NewRouter()
+	api.AddRoutes(router, m)
+	srv := &http.Server{
+		Handler: router,
+		Addr:    "127.0.0.1:8000",
+		// Good practice: enforce timeouts for servers you create!
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
+
 	go func() {
 		err := grp.Wait()
 		if err != nil && err != context.Canceled {

@@ -1,23 +1,49 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
+
+	"github.com/conwayste/registrar/monitor"
 
 	"github.com/gorilla/mux"
 )
 
-func AddRoutes(router *mux.Router) {
-	router.HandleFunc("/test", testRoute)
-	router.HandleFunc("/servers", listServers)
-	//XXX router.HandleFunc
+type RouteHandler func(w http.ResponseWriter, r *http.Request, m *monitor.Monitor) error
+
+func AddRoutes(router *mux.Router, m *monitor.Monitor) {
+	router.HandleFunc("/test", WithMonitor(m, testRoute))
+	router.HandleFunc("/servers", WithMonitor(m, listServers))
 }
 
-func listServers(w http.ResponseWriter, r *http.Request) {
-	//XXX
+func WithMonitor(m *monitor.Monitor, h RouteHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := h(w, r, m); err != nil {
+			w.Header().Add("content-type", "application/json")
+			w.WriteHeader(http.StatusBadRequest) // TODO: get the error code from err
+			w.Write([]byte(`{"ok": false}`))     // TODO: get the response body from err
+		}
+	}
 }
 
-func testRoute(w http.ResponseWriter, r *http.Request) {
+func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor) error {
+	serverList := m.ListServers()
+	responseBody, err := json.Marshal(struct {
+		Servers []string `json:"servers"`
+	}{serverList})
+	if err != nil {
+		return err
+	}
+
+	w.Header().Add("content-type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(responseBody))
+	return nil
+}
+
+func testRoute(w http.ResponseWriter, r *http.Request, m *monitor.Monitor) error {
 	w.Header().Add("content-type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"ok": true}`))
+	return nil
 }
