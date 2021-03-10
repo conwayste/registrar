@@ -12,7 +12,6 @@ import (
 type RouteHandler func(w http.ResponseWriter, r *http.Request, m *monitor.Monitor) error
 
 func AddRoutes(router *mux.Router, m *monitor.Monitor) {
-	router.HandleFunc("/test", WithMonitor(m, testRoute))
 	router.HandleFunc("/servers", WithMonitor(m, listServers))
 }
 
@@ -41,9 +40,6 @@ func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor) err
 	return nil
 }
 
-func testRoute(w http.ResponseWriter, r *http.Request, m *monitor.Monitor) error {
-	w.Header().Add("content-type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"ok": true}`))
-	return nil
+type ApiError struct {
+	Err error
 }
