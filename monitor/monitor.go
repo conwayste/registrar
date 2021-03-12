@@ -16,6 +16,11 @@ const (
 	delayInterval     = 5 * time.Second //XXX fiddle with later
 	maxPacketSize     = 1448
 	packetReadTimeout = 500 * time.Millisecond
+
+	pingTimeout         = 750 * time.Millisecond
+	maxMissedPings      = 4    // How many missed pings in a row does it take before a server counts as down //XXX use
+	maxRtts             = 30   // How many of the most recent ping round trip times to use for avg. ping calculation
+	missedPingsToDelist = 3000 // How many missed pings in a row causes delisting, requiring server to re-register
 )
 
 type Monitor struct {
@@ -31,40 +36,65 @@ func NewMonitor() *Monitor {
 	}
 }
 
-func (m *Monitor) ListServers() []string {
-	names := []string{}
-	for serverName := range m.statuses {
-		names = append(names, serverName)
-	}
-	return names
+type PublicServerInfo struct {
+	Addr        string `json:"addr"`
+	Name        string `json:"name"`
+	Players     int    `json:"players"`
+	Rooms       int    `json:"rooms"`
+	Version     string `json:"version"`
+	MissedPings int    `json:"missed_pings"`
 }
 
-func (m *Monitor) AddServer(serverName string) error {
+func (m *Monitor) ListServers(showAll bool) []*PublicServerInfo {
+	infos := []*PublicServerInfo{}
+	for serverAddr, status := range m.statuses {
+		if !showAll && status.missedPings > maxMissedPings {
+			// Don't list server that is down
+			continue
+		}
+		info := &PublicServerInfo{
+			Addr:        serverAddr,
+			Name:        status.ServerName,
+			Players:     int(status.PlayerCount),
+			Rooms:       int(status.RoomCount),
+			Version:     status.ServerVersion,
+			MissedPings: status.missedPings,
+		}
+		infos = append(infos, info)
+	}
+	return infos
+}
+
+func (m *Monitor) AddServer(serverAddr string) error {
 	if m == nil {
 		return nil
 	}
 
-	m.m.Lock()
-	defer m.m.Unlock()
-	// TODO: check that an existing server isn't getting overwritten
-	status := &Status{
-		inFlight: make(map[uint64]time.Time),
-	}
-	m.statuses[serverName] = status
-
-	dst, err := net.ResolveUDPAddr("udp", serverName)
+	dst, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {
 		return fmt.Errorf("failed to resolve server name: %w", err)
 	}
+
+	m.m.Lock()
+	defer m.m.Unlock()
+	if _, ok := m.statuses[serverAddr]; ok {
+		// Already present
+		return nil
+	}
+	status := &Status{
+		inFlight:    make(map[uint64]time.Time),
+		missedPings: maxMissedPings + 1, // It's down until we ping it
+	}
+	m.statuses[serverAddr] = status
+
 	status.ResolvedAddr = dst
 	ipStr := dst.String()
-	m.ipToName[ipStr] = serverName
+	m.ipToName[ipStr] = serverAddr
 	return nil
 }
 
 type Status struct {
 	// inFlight is a map of GetStatus nonces to times at which they were sent
-	//XXX needs cleanup mechanism so it can't increase without bound
 	inFlight map[uint64]time.Time
 	// rtts is a slice of ping round trip times. The newest has the highest index
 	//XXX needs cleanup mechanism so it can't increase without bound
@@ -74,6 +104,7 @@ type Status struct {
 	PlayerCount   uint64
 	RoomCount     uint64
 	ServerName    string
+	missedPings   int
 }
 
 // Ping returns the average ping, or nil if unknown.
@@ -95,7 +126,7 @@ func (s *Status) CalcPing() *time.Duration {
 }
 
 // TODO: panic recovery
-func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn) error {
+func (m *Monitor) Send(ctx context.Context, log *zap.Logger, conn net.PacketConn) error {
 	defer func() { log.Debug("Send exited") }()
 	ticker := time.NewTicker(delayInterval)
 	for {
@@ -105,11 +136,12 @@ func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn)
 		case <-ticker.C:
 		}
 
+		delistedServerAddrs := []string{}
 		m.m.Lock()
 		func() {
 			defer m.m.Unlock()
-			for serverName, _ := range m.statuses {
-				log := log.With(zap.String("serverName", serverName))
+			for serverAddr := range m.statuses {
+				log := log.With(zap.String("serverAddr", serverAddr))
 				log.Debug("sending server ping")
 
 				packet := &ServerGetStatus{
@@ -120,7 +152,7 @@ func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn)
 					log.Error("failed to marshal GetStatus", zap.Error(err))
 					continue
 				}
-				status, ok := m.statuses[serverName]
+				status, ok := m.statuses[serverAddr]
 				if !ok {
 					log.Error("status not found in map for server name")
 					continue
@@ -132,13 +164,38 @@ func Send(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn)
 					continue
 				}
 				log.Debug("sent successfully")
+
+				// Keep track of the nonce and send time for later
 				status.inFlight[packet.Nonce] = time.Now()
+				for nonce, sendTime := range status.inFlight {
+					if sendTime.Add(pingTimeout).Before(time.Now()) {
+						// timed out; delete
+						delete(status.inFlight, nonce)
+						status.missedPings += 1
+						if status.missedPings > missedPingsToDelist {
+							delistedServerAddrs = append(delistedServerAddrs, serverAddr)
+						}
+					}
+				}
+			}
+
+			if len(delistedServerAddrs) > 0 {
+				log.Info("delisting servers", zap.Strings("delistedAddrs", delistedServerAddrs))
+				for _, serverAddr := range delistedServerAddrs {
+					status := m.statuses[serverAddr]
+					if status != nil {
+						delete(m.statuses, serverAddr)
+						if status.ResolvedAddr != nil {
+							delete(m.ipToName, (*status.ResolvedAddr).String())
+						}
+					}
+				}
 			}
 		}()
 	}
 }
 
-func Receive(ctx context.Context, log *zap.Logger, m *Monitor, conn net.PacketConn) error {
+func (m *Monitor) Receive(ctx context.Context, log *zap.Logger, conn net.PacketConn) error {
 	defer func() { log.Debug("Receive exited") }()
 	packetBuf := make([]byte, maxPacketSize)
 	for {
@@ -185,17 +242,18 @@ func processPacket(ctx context.Context, log *zap.Logger, m *Monitor, remoteAddr 
 	m.m.Lock()
 	defer m.m.Unlock()
 
-	serverName, ok := m.ipToName[remoteAddr.String()]
+	serverAddr, ok := m.ipToName[remoteAddr.String()]
 	if !ok {
 		log.Error("could not look up server name by IP of received packet")
 		return
 	}
-	log = log.With(zap.String("serverName", serverName))
-	status, ok := m.statuses[serverName]
+	log = log.With(zap.String("serverAddr", serverAddr))
+	status, ok := m.statuses[serverAddr]
 	if !ok {
 		log.Error("could not find Status by server name")
 		return
 	}
+	status.missedPings = 0
 
 	packetStatus := ServerStatus{}
 	if err := Unmarshal(buf, &packetStatus); err != nil {
@@ -214,6 +272,9 @@ func processPacket(ctx context.Context, log *zap.Logger, m *Monitor, remoteAddr 
 	rtt := time.Since(sentTime)
 
 	status.rtts = append(status.rtts, rtt)
+	if len(status.rtts) > maxRtts {
+		status.rtts = status.rtts[1:]
+	}
 
 	ping := status.CalcPing()
 	if ping != nil {

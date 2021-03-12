@@ -67,14 +67,14 @@ func main() {
 	}
 	grp, grpCtx := errgroup.WithContext(ctx) // grpCtx is cancelled once either returns non-nil error or both exit
 	grp.Go(func() error {
-		return monitor.Send(grpCtx, log, m, conn)
+		return m.Send(grpCtx, log, conn)
 	})
 	grp.Go(func() error {
-		return monitor.Receive(grpCtx, log, m, conn)
+		return m.Receive(grpCtx, log, conn)
 	})
 
 	router := mux.NewRouter()
-	api.AddRoutes(router, m)
+	api.AddRoutes(router, m, log)
 	srv := &http.Server{
 		Handler: router,
 		Addr:    "127.0.0.1:8000",
