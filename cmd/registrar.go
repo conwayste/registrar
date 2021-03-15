@@ -61,10 +61,6 @@ func main() {
 		log.Error("failed to add server", zap.Error(err))
 		return
 	}
-	if err := m.AddServer("127.0.0.1:2016"); err != nil { //XXX hardcoded localhost server!
-		log.Error("failed to add server", zap.Error(err))
-		return
-	}
 	grp, grpCtx := errgroup.WithContext(ctx) // grpCtx is cancelled once either returns non-nil error or both exit
 	grp.Go(func() error {
 		return m.Send(grpCtx, log, conn)
