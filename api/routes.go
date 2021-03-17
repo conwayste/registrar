@@ -87,7 +87,6 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 	if err != nil {
 		return fmt.Errorf("failed to read request body: %w", err)
 	}
-	log.Info("got body bytes", zap.ByteString("bodyBytes", bodyBytes)) //XXX remove this
 
 	var reqBody AddServerRequestBody
 	if err := json.Unmarshal(bodyBytes, &reqBody); err != nil {
@@ -97,7 +96,6 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 	if serverAddr == "" {
 		return errors.New("invalid serverAddr")
 	}
-	log.Info("got server address", zap.String("serverAddr", serverAddr)) //XXX remove this
 	// TODO: other checks
 
 	if err := m.AddServer(serverAddr); err != nil {
@@ -109,6 +107,7 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 		return nil
 	}
 
+	//XXX success JSON?
 	return nil
 }
 

@@ -57,10 +57,6 @@ func main() {
 	defer conn.Close()
 
 	m := monitor.NewMonitor()
-	if err := m.AddServer("chococat.conwayste.rs:2016"); err != nil { //XXX hardcoded remote server!
-		log.Error("failed to add server", zap.Error(err))
-		return
-	}
 	grp, grpCtx := errgroup.WithContext(ctx) // grpCtx is cancelled once either returns non-nil error or both exit
 	grp.Go(func() error {
 		return m.Send(grpCtx, log, conn)
