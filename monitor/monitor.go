@@ -65,6 +65,15 @@ func (m *Monitor) ListServers(showAll bool) []*PublicServerInfo {
 	return infos
 }
 
+type ResolveError struct {
+	Err        error
+	ServerAddr string
+}
+
+func (r ResolveError) Error() string {
+	return fmt.Sprintf("failed to resolve server address: %s", r.Err.Error())
+}
+
 func (m *Monitor) AddServer(serverAddr string) error {
 	if m == nil {
 		return nil
@@ -72,7 +81,7 @@ func (m *Monitor) AddServer(serverAddr string) error {
 
 	dst, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {
-		return fmt.Errorf("failed to resolve server name: %w", err)
+		return ResolveError{Err: err, ServerAddr: serverAddr}
 	}
 
 	m.m.Lock()

@@ -100,10 +100,20 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 
 	if err := m.AddServer(serverAddr); err != nil {
 		//XXX use ApiError
-		// TODO: maybe log something or at least a stats counter increment?
+		// TODO: consider stats counter increment instead of log here
+		log.Info("error from AddServer", zap.Error(err))
+
+		var resolveErr monitor.ResolveError
+		if errors.As(err, &resolveErr) {
+			w.Header().Add("content-type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error": "failed to resolve server address"}`))
+			return nil
+		}
+
 		w.Header().Add("content-type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error": "invalid JSON"}`))
+		w.Write([]byte(`{"error": "unknown server error; check the logs"}`))
 		return nil
 	}
 
