@@ -3,7 +3,6 @@ package monitor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
 	"net"
 	"sync"
@@ -24,9 +23,10 @@ const (
 )
 
 type Monitor struct {
-	statuses map[string]*Status
-	ipToName map[string]string
-	m        sync.RWMutex // guards statuses, resolved, and ipToName
+	statuses        map[string]*Status
+	ipToName        map[string]string
+	m               sync.RWMutex // guards statuses, resolved, and ipToName
+	AllowSpecialIPs bool
 }
 
 func NewMonitor() *Monitor {
@@ -65,13 +65,35 @@ func (m *Monitor) ListServers(showAll bool) []*PublicServerInfo {
 	return infos
 }
 
-type ResolveError struct {
-	Err        error
-	ServerAddr string
+type ServerAddErrorCode int
+
+const (
+	ServerAddErrInvalid ServerAddErrorCode = iota
+	ServerAddErrResolve
+	ServerAddErrIsSpecialIP
+)
+
+type ServerAddError struct {
+	Code    ServerAddErrorCode
+	Err     error
+	LogData []zap.Field
 }
 
-func (r ResolveError) Error() string {
-	return fmt.Sprintf("failed to resolve server address: %s", r.Err.Error())
+func NewServerAddError(code ServerAddErrorCode, msg string, logData ...zap.Field) ServerAddError {
+	return ServerAddError{
+		Code:    code,
+		Err:     errors.New(msg),
+		LogData: logData,
+	}
+}
+
+func (a ServerAddError) Error() string {
+	return a.Err.Error()
+}
+
+// Unwrap satisfies the errors.Unwrapper interface
+func (a ServerAddError) Unwrap() error {
+	return a.Err
 }
 
 func (m *Monitor) AddServer(serverAddr string) error {
@@ -81,7 +103,11 @@ func (m *Monitor) AddServer(serverAddr string) error {
 
 	dst, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {
-		return ResolveError{Err: err, ServerAddr: serverAddr}
+		return NewServerAddError(ServerAddErrResolve, "failed to resolve server address",
+			zap.Error(err), zap.String("serverAddr", serverAddr))
+	}
+	if !m.AllowSpecialIPs && !dst.IP.IsGlobalUnicast() {
+		return NewServerAddError(ServerAddErrIsSpecialIP, "cannot register special IP", zap.String("ip", dst.IP.String()))
 	}
 
 	m.m.Lock()

@@ -14,7 +14,8 @@ import (
 	"go.uber.org/zap"
 )
 
-const maxAddServerBodySize = 1000
+const maxAddServerBodySize = 1000 // Consider increasing if we add more fields to the /addServer request body
+const maxResponseSnippetLen = 150 // Increase/decrease depending on log volume
 
 type RouteHandler func(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error
 
@@ -23,23 +24,41 @@ func AddRoutes(router *mux.Router, m *monitor.Monitor, log *zap.Logger) {
 	router.HandleFunc("/addServer", WithMonitorAndLog(m, log, addServer))
 }
 
+//////////////////// MIDDLEWARE /////////////////////////////////
 func WithMonitorAndLog(m *monitor.Monitor, log *zap.Logger, h RouteHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r, m, log); err != nil {
-			log.Error("error", zap.Error(err)) // TODO: consider not logging this
+			var apiErr ApiError
+			if errors.As(err, &apiErr) {
+				log := log.With(apiErr.LogData...)
+				var responseSnippet string
+				bodyBytes, err := json.Marshal(apiErr.ResponseBody)
+				if err != nil {
+					log = log.With(zap.String("unmarshalErr", err.Error()))
+					bodyBytes = []byte(`{"error": "unknown error"}`)
+				}
+				responseSnippet = string(bodyBytes)
+				if len(responseSnippet) > maxResponseSnippetLen {
+					responseSnippet = responseSnippet[:maxResponseSnippetLen-3] + "..."
+				}
+				log = log.With(zap.String("responseSnippet", responseSnippet))
+
+				if apiErr.ResponseCode/100 == 5 {
+					log.Error("API error", zap.Error(apiErr.Err))
+				} else {
+					log.Info("API issue", zap.String("issue", apiErr.Err.Error()))
+				}
+				w.Header().Add("content-type", "application/json")
+				w.WriteHeader(apiErr.ResponseCode)
+				w.Write(bodyBytes)
+				return
+			}
+			log.Error("Uh oh, error is not wrapped in an ApiError", zap.Error(err))
 			w.Header().Add("content-type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)        // TODO: get the error code from err
-			w.Write([]byte(`{"error": "bad request"}`)) // TODO: get the response body from err
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error": "Internal Server Error"}`))
 		}
 	}
-}
-
-//XXX use this
-type ApiError struct {
-	ResponseCode int
-	// ResponseBody is the response body; must support json.Marshal
-	ResponseBody interface{}
-	Err          error
 }
 
 //////////////////// ROUTES /////////////////////////////////
@@ -48,23 +67,18 @@ type ApiError struct {
 func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error {
 	// TODO: middleware for following; I'm a little disappointed gorilla/mux doesn't handle this automatically
 	if r.Method != http.MethodGet {
-		//XXX use ApiError
-		w.Header().Add("content-type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write([]byte(`{"error": "unsupported method"}`))
-		return nil
+		return NewApiError(http.StatusMethodNotAllowed, `{"error": "unsupported method"}`, nil)
 	}
 	serverList := m.ListServers(false)
 	responseBody, err := json.Marshal(struct {
 		Servers []*monitor.PublicServerInfo `json:"servers"`
 	}{serverList})
 	if err != nil {
+		// Probably unreachable
 		return err
 	}
 
-	w.Header().Add("content-type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(responseBody))
+	successResponseBytes(w, responseBody)
 	return nil
 }
 
@@ -72,11 +86,7 @@ func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log
 func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error {
 	// TODO: middleware for following; I'm a little disappointed gorilla/mux doesn't handle this automatically
 	if r.Method != http.MethodPost {
-		//XXX use ApiError
-		w.Header().Add("content-type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write([]byte(`{"error": "unsupported method"}`))
-		return nil
+		return NewApiError(http.StatusMethodNotAllowed, `{"error": "unsupported method"}`, nil)
 	}
 
 	if r.Body == nil {
@@ -99,29 +109,72 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 	// TODO: other checks
 
 	if err := m.AddServer(serverAddr); err != nil {
-		//XXX use ApiError
-		// TODO: consider stats counter increment instead of log here
-		log.Info("error from AddServer", zap.Error(err))
+		// TODO: add stats counter increment
 
-		var resolveErr monitor.ResolveError
-		if errors.As(err, &resolveErr) {
-			w.Header().Add("content-type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error": "failed to resolve server address"}`))
-			return nil
+		var serverAddErr monitor.ServerAddError
+		if errors.As(err, &serverAddErr) {
+			return NewApiErrorFromServerAddError(log, serverAddErr)
 		}
 
-		w.Header().Add("content-type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error": "unknown server error; check the logs"}`))
-		return nil
+		return NewApiError(http.StatusBadRequest, `{"error": "unknown server error; check the logs"}`, err)
 	}
 
-	//XXX success JSON?
+	successResponse(w, `{"added":true}`)
 	return nil
 }
 
 type AddServerRequestBody struct {
 	// HostAndPort is the public address (in "host:port" format)
 	HostAndPort string `json:"host_and_port"`
+}
+
+//////////////////// ERROR HANDLING /////////////////////////////////
+
+func successResponse(w http.ResponseWriter, body string) {
+	successResponseBytes(w, []byte(body))
+}
+
+func successResponseBytes(w http.ResponseWriter, body []byte) {
+	w.Header().Add("content-type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(body)
+}
+
+type ApiError struct {
+	ResponseCode int
+	// ResponseBody is the response body; must support json.Marshal
+	ResponseBody interface{}
+	Err          error
+	LogData      []zap.Field
+}
+
+func (e ApiError) Error() string {
+	return e.Err.Error()
+}
+
+func (e ApiError) Unwrap() error {
+	return e.Err
+}
+
+func NewApiError(code int, body string, err error, logData ...zap.Field) ApiError {
+	return ApiError{
+		ResponseCode: code,
+		ResponseBody: []byte(body),
+		Err:          err,
+		LogData:      logData,
+	}
+}
+
+func NewApiErrorFromServerAddError(log *zap.Logger, err monitor.ServerAddError) ApiError {
+	responseCode := http.StatusInternalServerError
+	errorString := "Internal Server Error" // Don't use any special characters here!
+	switch err.Code {
+	default:
+		log.Warn("unrecognized ServerAddErrorCode", zap.Int("code", int(err.Code)))
+	case monitor.ServerAddErrIsSpecialIP:
+		errorString = fmt.Sprintf("IP type is not allowed")
+	case monitor.ServerAddErrResolve:
+		errorString = fmt.Sprintf("failed to resolve server host name")
+	}
+	return NewApiError(responseCode, fmt.Sprintf(`{"error":%q}`, errorString), err)
 }

@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	// TODO: logLevel = flag.String("logLevel", "debug", "error|warn|info|debug")
-	devMode = flag.Bool("devMode", true, "whether to run in development mode")
+	devMode         = flag.Bool("devMode", true, "whether to run in development mode")
+	allowSpecialIPs = flag.Bool("allowSpecialIPs", false,
+		"whether unusual (not global or not unicast) IPs are allowed; don't set to true in production")
 )
 
 func main() {
@@ -57,6 +58,7 @@ func main() {
 	defer conn.Close()
 
 	m := monitor.NewMonitor()
+	m.AllowSpecialIPs = *allowSpecialIPs
 	grp, grpCtx := errgroup.WithContext(ctx) // grpCtx is cancelled once either returns non-nil error or both exit
 	grp.Go(func() error {
 		return m.Send(grpCtx, log, conn)
