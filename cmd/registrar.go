@@ -22,6 +22,8 @@ var (
 	devMode         = flag.Bool("devMode", true, "whether to run in development mode")
 	allowSpecialIPs = flag.Bool("allowSpecialIPs", false,
 		"whether unusual (not global or not unicast) IPs are allowed; don't set to true in production")
+	useProxyHeaders = flag.Bool("useProxyHeaders", true,
+		"whether to trust X-Forwarded-For; must be true with a reverse proxy (nginx etc.); must be false otherwise")
 )
 
 func main() {
@@ -68,7 +70,7 @@ func main() {
 	})
 
 	router := mux.NewRouter()
-	api.AddRoutes(router, m, log)
+	api.AddRoutes(router, m, log, *useProxyHeaders)
 	srv := &http.Server{
 		Handler: router,
 		Addr:    "127.0.0.1:8000",

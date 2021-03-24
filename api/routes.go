@@ -10,6 +10,7 @@ import (
 
 	"github.com/conwayste/registrar/monitor"
 
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
 )
@@ -19,44 +20,56 @@ const maxResponseSnippetLen = 150 // Increase/decrease depending on log volume
 
 type RouteHandler func(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error
 
-func AddRoutes(router *mux.Router, m *monitor.Monitor, log *zap.Logger) {
-	router.HandleFunc("/servers", WithMonitorAndLog(m, log, listServers))
-	router.HandleFunc("/addServer", WithMonitorAndLog(m, log, addServer))
+func AddRoutes(router *mux.Router, m *monitor.Monitor, log *zap.Logger, useProxyHeaders bool) {
+	maybeProxyHeaders := NoOp
+	if useProxyHeaders {
+		maybeProxyHeaders = handlers.ProxyHeaders
+	}
+	router.HandleFunc("/servers", maybeProxyHeaders(
+		WithMonitorAndLog(m, log, listServers),
+	).ServeHTTP)
+	router.HandleFunc("/addServer", maybeProxyHeaders(
+		WithMonitorAndLog(m, log, addServer),
+	).ServeHTTP)
 }
 
 //////////////////// MIDDLEWARE /////////////////////////////////
+func NoOp(h http.Handler) http.Handler {
+	return h
+}
+
 func WithMonitorAndLog(m *monitor.Monitor, log *zap.Logger, h RouteHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r, m, log); err != nil {
 			var apiErr ApiError
-			if errors.As(err, &apiErr) {
-				log := log.With(apiErr.LogData...)
-				var responseSnippet string
-				bodyBytes, err := json.Marshal(apiErr.ResponseBody)
-				if err != nil {
-					log = log.With(zap.String("unmarshalErr", err.Error()))
-					bodyBytes = []byte(`{"error": "unknown error"}`)
-				}
-				responseSnippet = string(bodyBytes)
-				if len(responseSnippet) > maxResponseSnippetLen {
-					responseSnippet = responseSnippet[:maxResponseSnippetLen-3] + "..."
-				}
-				log = log.With(zap.String("responseSnippet", responseSnippet))
-
-				if apiErr.ResponseCode/100 == 5 {
-					log.Error("API error", zap.Error(apiErr.Err))
-				} else {
-					log.Info("API issue", zap.String("issue", apiErr.Err.Error()))
-				}
+			if !errors.As(err, &apiErr) {
+				log.Error("Uh oh, error is not wrapped in an ApiError", zap.Error(err))
 				w.Header().Add("content-type", "application/json")
-				w.WriteHeader(apiErr.ResponseCode)
-				w.Write(bodyBytes)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"error": "Internal Server Error"}`))
 				return
 			}
-			log.Error("Uh oh, error is not wrapped in an ApiError", zap.Error(err))
+			log := log.With(apiErr.LogData...)
+			var responseSnippet string
+			bodyBytes, err := json.Marshal(apiErr.ResponseBody)
+			if err != nil {
+				log = log.With(zap.String("unmarshalErr", err.Error()))
+				bodyBytes = []byte(`{"error": "unknown error"}`)
+			}
+			responseSnippet = string(bodyBytes)
+			if len(responseSnippet) > maxResponseSnippetLen {
+				responseSnippet = responseSnippet[:maxResponseSnippetLen-3] + "..."
+			}
+			log = log.With(zap.String("responseSnippet", responseSnippet))
+
+			if apiErr.ResponseCode/100 == 5 {
+				log.Error("API error", zap.Error(apiErr.Err))
+			} else {
+				log.Info("API issue", zap.String("issue", apiErr.Err.Error()))
+			}
 			w.Header().Add("content-type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error": "Internal Server Error"}`))
+			w.WriteHeader(apiErr.ResponseCode)
+			w.Write(bodyBytes)
 		}
 	}
 }

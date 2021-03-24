@@ -17,7 +17,7 @@ const (
 	packetReadTimeout = 500 * time.Millisecond
 
 	pingTimeout         = 750 * time.Millisecond
-	maxMissedPings      = 4    // How many missed pings in a row does it take before a server counts as down //XXX use
+	maxMissedPings      = 4    // How many missed pings in a row does it take before a server counts as down
 	maxRtts             = 30   // How many of the most recent ping round trip times to use for avg. ping calculation
 	missedPingsToDelist = 3000 // How many missed pings in a row causes delisting, requiring server to re-register
 )
