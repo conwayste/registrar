@@ -7,16 +7,20 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/conwayste/registrar/monitor"
 
+	"github.com/didip/tollbooth"
+	"github.com/didip/tollbooth/limiter"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
 )
 
-const maxAddServerBodySize = 1000 // Consider increasing if we add more fields to the /addServer request body
-const maxResponseSnippetLen = 150 // Increase/decrease depending on log volume
+const maxAddServerBodySize = 1000  // Consider increasing if we add more fields to the /addServer request body
+const maxResponseSnippetLen = 150  // Increase/decrease depending on log volume
+const maxServerAddsPerSecPerIp = 2 // Should probably increase this!
 
 type RouteHandler func(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error
 
@@ -25,8 +29,17 @@ func AddRoutes(router *mux.Router, m *monitor.Monitor, log *zap.Logger, useProxy
 	if useProxyHeaders {
 		maybeProxyHeaders = handlers.ProxyHeaders
 	}
+
+	lmt := tollbooth.NewLimiter(maxServerAddsPerSecPerIp, &limiter.ExpirableOptions{DefaultExpirationTTL: time.Hour})
+	if useProxyHeaders {
+		lmt.SetIPLookups([]string{"X-Forwarded-For", "X-Real-IP"})
+	}
+
+	// The routes
 	router.HandleFunc("/servers", maybeProxyHeaders(
-		WithMonitorAndLog(m, log, listServers),
+		tollbooth.LimitFuncHandler(lmt,
+			WithMonitorAndLog(m, log, listServers),
+		),
 	).ServeHTTP)
 	router.HandleFunc("/addServer", maybeProxyHeaders(
 		WithMonitorAndLog(m, log, addServer),
