@@ -1,4 +1,4 @@
-Regstrar for Conwayste Servers
+Registrar for Conwayste Servers
 ==============================
 
 The registrar maintains a list of all reachable Conwayste servers. Each server
