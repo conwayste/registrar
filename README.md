@@ -21,7 +21,7 @@ to.
 
 ## Installing and Running
 
-You probably don't need to do this, since there is [an official registrar])https://registry.conwayste.rs/servers), but here are the instructions anyway. Use a recent version of Go (1.15+ or so).
+You probably don't need to do this, since there is [an official registrar](https://registry.conwayste.rs/servers), but here are the instructions anyway. Use a recent version of Go (1.15+ or so).
 
 ```
 git clone https://github.com/conwayste/registrar
