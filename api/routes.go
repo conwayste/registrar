@@ -18,9 +18,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const maxAddServerBodySize = 1000  // Consider increasing if we add more fields to the /addServer request body
-const maxResponseSnippetLen = 150  // Increase/decrease depending on log volume
-const maxServerAddsPerSecPerIp = 2 // Should probably increase this!
+const maxAddServerBodySize = 1000 // Consider increasing if we add more fields to the /addServer request body
+const maxResponseSnippetLen = 150 // Increase/decrease depending on log volume
+const maxServerAddsPerSecPerIp = 10
+const maxServerListsPerSecPerIp = 30
 
 type RouteHandler func(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error
 
@@ -30,19 +31,24 @@ func AddRoutes(router *mux.Router, m *monitor.Monitor, log *zap.Logger, useProxy
 		maybeProxyHeaders = handlers.ProxyHeaders
 	}
 
-	lmt := tollbooth.NewLimiter(maxServerAddsPerSecPerIp, &limiter.ExpirableOptions{DefaultExpirationTTL: time.Hour})
+	listLimiter := tollbooth.NewLimiter(maxServerListsPerSecPerIp,
+		&limiter.ExpirableOptions{DefaultExpirationTTL: time.Hour})
+	addLimiter := tollbooth.NewLimiter(maxServerAddsPerSecPerIp,
+		&limiter.ExpirableOptions{DefaultExpirationTTL: time.Hour})
 	if useProxyHeaders {
-		lmt.SetIPLookups([]string{"X-Forwarded-For", "X-Real-IP"})
+		addLimiter.SetIPLookups([]string{"X-Forwarded-For", "X-Real-IP"})
 	}
 
 	// The routes
 	router.HandleFunc("/servers", maybeProxyHeaders(
-		tollbooth.LimitFuncHandler(lmt,
+		tollbooth.LimitFuncHandler(listLimiter,
 			WithMonitorAndLog(m, log, listServers),
 		),
 	).ServeHTTP)
 	router.HandleFunc("/addServer", maybeProxyHeaders(
-		WithMonitorAndLog(m, log, addServer),
+		tollbooth.LimitFuncHandler(addLimiter,
+			WithMonitorAndLog(m, log, addServer),
+		),
 	).ServeHTTP)
 }
 
@@ -108,7 +114,6 @@ func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log
 	return nil
 }
 
-// TODO: rate limiting!!!!!!!!!!!
 func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error {
 	// TODO: middleware for following; I'm a little disappointed gorilla/mux doesn't handle this automatically
 	if r.Method != http.MethodPost {
