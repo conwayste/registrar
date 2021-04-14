@@ -25,7 +25,7 @@ const (
 type Monitor struct {
 	statuses        map[string]*Status
 	ipToName        map[string]string
-	m               sync.RWMutex // guards statuses, resolved, and ipToName
+	m               sync.RWMutex // guards statuses and ipToName
 	AllowSpecialIPs bool
 }
 
@@ -63,6 +63,14 @@ func (m *Monitor) ListServers(showAll bool) []*PublicServerInfo {
 		infos = append(infos, info)
 	}
 	return infos
+}
+
+func (m *Monitor) ListServerAddresses() []string {
+	addrs := []string{}
+	for serverAddr := range m.statuses {
+		addrs = append(addrs, serverAddr)
+	}
+	return addrs
 }
 
 type ServerAddErrorCode int
