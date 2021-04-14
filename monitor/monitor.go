@@ -160,9 +160,13 @@ func (s *Status) CalcPing() *time.Duration {
 	}
 }
 
-// TODO: panic recovery
 func (m *Monitor) Send(ctx context.Context, log *zap.Logger, conn net.PacketConn) error {
 	defer func() { log.Debug("Send exited") }()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("Recovered from panic :-(", zap.Reflect("panicValue", r))
+		}
+	}()
 	ticker := time.NewTicker(delayInterval)
 	for {
 		select {
@@ -175,6 +179,11 @@ func (m *Monitor) Send(ctx context.Context, log *zap.Logger, conn net.PacketConn
 		m.m.Lock()
 		func() {
 			defer m.m.Unlock()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error("Recovered from panic :-( but the show will go on", zap.Reflect("panicValue", r))
+				}
+			}()
 			for serverAddr := range m.statuses {
 				log := log.With(zap.String("serverAddr", serverAddr))
 				log.Debug("sending server ping")
