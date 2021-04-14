@@ -113,7 +113,7 @@ func main() {
 }
 
 type BackedUpServer struct {
-	Addr string `json"addr"`
+	Addr string `json:"addr"`
 }
 
 // LoadFromFile restores a backup. Since it resolves each server serially, it can be slow.
