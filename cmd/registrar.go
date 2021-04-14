@@ -157,7 +157,7 @@ func BackupToFile(ctx context.Context, m *monitor.Monitor, log *zap.Logger, path
 			// Handled below
 		}
 
-		tempPath := fmt.Sprintf("%s.new%d", path, time.Now().UnixNano())
+		tempPath := fmt.Sprintf(".%s.new%d", path, time.Now().UnixNano())
 		f, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE, 0755)
 		if err != nil {
 			log.Error("failed to open backup file for writing", zap.String("tempPath", tempPath), zap.Error(err))
@@ -181,12 +181,9 @@ func BackupToFile(ctx context.Context, m *monitor.Monitor, log *zap.Logger, path
 			// Don't overwrite the good backup file!
 			continue
 		}
-		if err := os.Link(tempPath, path); err != nil {
+		if err := os.Rename(tempPath, path); err != nil {
 			log.Error("failed to move backup file from temp location to perm. loc.", zap.Error(err))
 			continue
-		}
-		if err := os.Remove(tempPath); err != nil {
-			log.Error("failed to remove temp backup file", zap.Error(err))
 		}
 	}
 }
