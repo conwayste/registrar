@@ -95,16 +95,24 @@ func WithMonitorAndLog(m *monitor.Monitor, log *zap.Logger, h RouteHandler) http
 
 //////////////////// ROUTES /////////////////////////////////
 
-// TODO: paging
 func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error {
 	// TODO: middleware for following; I'm a little disappointed gorilla/mux doesn't handle this automatically
 	if r.Method != http.MethodGet {
 		return NewApiError(http.StatusMethodNotAllowed, `{"error": "unsupported method"}`, nil)
 	}
 	serverList := m.ListServers(false)
+
+	// TODO: paging
+	var truncatedResults bool
+	if len(serverList) > 200 {
+		serverList = serverList[:200]
+		truncatedResults = true
+	}
+
 	responseBody, err := json.Marshal(struct {
-		Servers []*monitor.PublicServerInfo `json:"servers"`
-	}{serverList})
+		Servers          []*monitor.PublicServerInfo `json:"servers"`
+		TruncatedResults bool                        `json:"truncated_results,omitempty"`
+	}{serverList, truncatedResults})
 	if err != nil {
 		// Probably unreachable
 		return err
