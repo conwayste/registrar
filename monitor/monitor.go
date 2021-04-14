@@ -132,7 +132,6 @@ type Status struct {
 	// inFlight is a map of GetStatus nonces to times at which they were sent
 	inFlight map[uint64]time.Time
 	// rtts is a slice of ping round trip times. The newest has the highest index
-	//XXX needs cleanup mechanism so it can't increase without bound
 	rtts          []time.Duration
 	ResolvedAddr  *net.UDPAddr
 	ServerVersion string
