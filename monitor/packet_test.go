@@ -6,7 +6,8 @@ import (
 )
 
 var (
-	// The byte slices here must be kept in sync with the tests in netwayste
+	// The byte slices here must be kept in sync with the tests in netwayste and netwaystev2
+	// See netwaystev2/src/filter/tests/packet_serialization.rs
 	expectedGetStatusBytes = []byte{
 		4, 0, 0, 0, // 4=GetStatus
 		0xF0, 0xDE, 0xBC, 0x9A, 0x78, 0x56, 0x34, 0x12, // ping.nonce
