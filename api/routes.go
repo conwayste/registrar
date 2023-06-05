@@ -99,7 +99,7 @@ func WithMonitorAndLog(m *monitor.Monitor, log *zap.Logger, h RouteHandler) http
 func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error {
 	// TODO: middleware for following; I'm a little disappointed gorilla/mux doesn't handle this automatically
 	if r.Method != http.MethodGet {
-		return NewApiError(http.StatusMethodNotAllowed, `{"error": "unsupported method"}`, nil)
+		return NewApiError(http.StatusMethodNotAllowed, "unsupported method", nil)
 	}
 	serverList := m.ListServers(false)
 
@@ -132,7 +132,7 @@ func validHostAndPort(hostAndPort string) bool {
 func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error {
 	// TODO: middleware for following; I'm a little disappointed gorilla/mux doesn't handle this automatically
 	if r.Method != http.MethodPost {
-		return NewApiError(http.StatusMethodNotAllowed, `{"error": "unsupported method"}`, nil)
+		return NewApiError(http.StatusMethodNotAllowed, "unsupported method", nil)
 	}
 
 	if r.Body == nil {
@@ -150,7 +150,7 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 	}
 	serverAddr := reqBody.HostAndPort
 	if !validHostAndPort(serverAddr) {
-		return NewApiError(http.StatusBadRequest, `{"error": "Invalid host_and_port format; expected host, then colon, then port"}`, nil)
+		return NewApiError(http.StatusBadRequest, "Invalid host_and_port format; expected host, then colon, then port", nil)
 	}
 
 	if err := m.AddServer(serverAddr); err != nil {
@@ -161,7 +161,7 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 			return NewApiErrorFromServerAddError(log, serverAddErr)
 		}
 
-		return NewApiError(http.StatusBadRequest, `{"error": "unknown server error; check the logs"}`, err)
+		return NewApiError(http.StatusBadRequest, "unknown server error; check the logs", err)
 	}
 
 	successResponse(w, `{"added":true}`)
@@ -201,10 +201,22 @@ func (e ApiError) Unwrap() error {
 	return e.Err
 }
 
-func NewApiError(code int, body string, err error, logData ...zap.Field) ApiError {
+// NewApiError returns an ApiError using the given arguments. If body is a
+// string, a struct will be used for the ResponseBody field that marshals to
+// {"error":"..."}. Otherwise, the body is used for ResponseBody.
+func NewApiError(code int, body interface{}, err error, logData ...zap.Field) ApiError {
+	var responseBody interface{}
+	switch rb := body.(type) {
+	case string:
+		responseBody = struct {
+			Error string `json:"error"`
+		}{rb}
+	default:
+		responseBody = body
+	}
 	return ApiError{
 		ResponseCode: code,
-		ResponseBody: []byte(body),
+		ResponseBody: responseBody,
 		Err:          err,
 		LogData:      logData,
 	}
@@ -221,5 +233,5 @@ func NewApiErrorFromServerAddError(log *zap.Logger, err monitor.ServerAddError) 
 	case monitor.ServerAddErrResolve:
 		errorString = fmt.Sprintf("failed to resolve server host name")
 	}
-	return NewApiError(responseCode, fmt.Sprintf(`{"error":%q}`, errorString), err)
+	return NewApiError(responseCode, errorString, err)
 }
