@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/conwayste/registrar/monitor"
@@ -72,7 +73,7 @@ func WithMonitorAndLog(m *monitor.Monitor, log *zap.Logger, h RouteHandler) http
 			var responseSnippet string
 			bodyBytes, err := json.Marshal(apiErr.ResponseBody)
 			if err != nil {
-				log = log.With(zap.String("unmarshalErr", err.Error()))
+				log = log.With(zap.String("marshalErr", err.Error()))
 				bodyBytes = []byte(`{"error": "unknown error"}`)
 			}
 			responseSnippet = string(bodyBytes)
@@ -83,7 +84,7 @@ func WithMonitorAndLog(m *monitor.Monitor, log *zap.Logger, h RouteHandler) http
 
 			if apiErr.ResponseCode/100 == 5 {
 				log.Error("API error", zap.Error(apiErr.Err))
-			} else {
+			} else if apiErr.Err != nil {
 				log.Info("API issue", zap.String("issue", apiErr.Err.Error()))
 			}
 			w.Header().Add("content-type", "application/json")
@@ -122,6 +123,12 @@ func listServers(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log
 	return nil
 }
 
+var hostAndPortRE = regexp.MustCompile(`^[^:]+:[1-9]\d*$`)
+
+func validHostAndPort(hostAndPort string) bool {
+	return hostAndPortRE.MatchString(hostAndPort)
+}
+
 func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *zap.Logger) error {
 	// TODO: middleware for following; I'm a little disappointed gorilla/mux doesn't handle this automatically
 	if r.Method != http.MethodPost {
@@ -142,10 +149,9 @@ func addServer(w http.ResponseWriter, r *http.Request, m *monitor.Monitor, log *
 		return errors.New("JSON unmarshal failure")
 	}
 	serverAddr := reqBody.HostAndPort
-	if serverAddr == "" {
-		return errors.New("invalid serverAddr")
+	if !validHostAndPort(serverAddr) {
+		return NewApiError(http.StatusBadRequest, `{"error": "Invalid host_and_port format; expected host, then colon, then port"}`, nil)
 	}
-	// TODO: other checks
 
 	if err := m.AddServer(serverAddr); err != nil {
 		// TODO: add stats counter increment
